@@ -15,7 +15,7 @@ function App() {
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const inference = new HfInference(process.env.REACT_APP_HF_TOKEN);
+  const inference = new HfInference(process.env.AI_API_TOKEN);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -25,52 +25,60 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
-  const analyzeWithAI = async (text: string): Promise<string> => {
+  const analyzeWithAI = async (text: string) => {
     try {
-      console.log('Sending request to Hugging Face...');
-      
-      const prompt = `<s>You are Hatch.AI, a helpful and knowledgeable healthcare claims assistant. You help users understand their healthcare claims and insurance coverage. Keep your responses clear, accurate, and focused on healthcare claims-related topics. Do not make up or promise any benefits or services.
-
-Question/Statement: ${text}
-
-Response (be concise and factual):`;
-
-      const response = await inference.textGeneration({
-        model: 'facebook/opt-350m',
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 150,
-          temperature: 0.3,
-          top_p: 0.85,
-          do_sample: true,
-          return_full_text: false,
-          repetition_penalty: 1.2
-        }
+      console.log('Sending request to x.ai API...');
+  
+      const requestBody = {
+        messages: [
+          {
+            role: 'system',
+            content: 'You are Hatch.AI, a helpful and knowledgeable healthcare claims assistant. You help users understand their healthcare claims and insurance coverage. Keep your responses clear, accurate, and focused on healthcare claims-related topics. Do not make up or promise any benefits or services.'
+          },
+          {
+            role: 'user',
+            content: text
+          }
+        ],
+        model: 'grok-2-1212',
+        stream: false,
+        temperature: 0.3
+      };
+  
+      const response = await fetch('https://api.x.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${`xai-aGAIq4ocByGc5rqsWrLqU9Nqs1Jq4LfrEQDHnlioXjQDF6McJVwUwlD7G8lFXlGSloZPdnuT1uGDu94m`}` // Replace with your actual API key or env variable
+        },
+        body: JSON.stringify(requestBody)
       });
-
-      console.log('Response received:', response);
-
-      if (response && response.generated_text) {
-        let cleanResponse = response.generated_text
-          .replace(/^Response:|^Assistant:|^AI:|<s>|<\/s>/g, '')
+  
+      if (!response.ok) {
+        throw new Error(`API error: ${response.statusText}`);
+      }
+  
+      const data = await response.json();
+  
+      if (data && data.choices && data.choices[0] && data.choices[0].message) {
+        const cleanResponse = data.choices[0].message.content
           .trim();
-        
+  
         if (!cleanResponse) {
           throw new Error('Empty response received');
         }
-        
+  
         return cleanResponse;
       } else {
-        throw new Error('Empty response from API');
+        throw new Error('Invalid response structure from API');
       }
-
-    } catch (error: unknown) {
+    } catch (error) {
       console.error('AI Analysis error:', error);
-      
+  
       if (error instanceof Error) {
         return `I apologize, but I encountered an error: ${error.message}. Please try again.`;
       }
-
+  
       return "I'm currently experiencing technical difficulties. Please try again in a moment.";
     }
   };
