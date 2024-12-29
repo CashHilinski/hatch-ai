@@ -1,6 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { HfInference } from '@huggingface/inference';
 import './App.css';
+import { Profile } from './components/Profile';
+import { BillAuditor } from './components/BillAuditor';
+import { TreatmentInfo } from './components/TreatmentInfo';
+import { BillItem } from './types';
+import { ProfileOverview } from './components/ProfileOverview';
+import { Message } from './components/Message';
+import { DocumentUpload } from './components/DocumentUpload';
+import './styles/DocumentUpload.css';
 
 interface Message {
   id: string;
@@ -9,11 +17,48 @@ interface Message {
   timestamp: string;
 }
 
+interface InsuranceInfo {
+  provider: string;
+  policyNumber: string;
+  planType: string;
+  deductible: string;
+  copay: string;
+  additionalInfo: string;
+}
+
+interface TreatmentDetails {
+  description: string;
+  date: string;
+  provider: string;
+  location: string;
+  wasEmergency: boolean;
+  symptoms: string;
+  diagnosis: string;
+  followupNeeded: boolean;
+}
+
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [showProfile, setShowProfile] = useState(false);
+  const [insuranceInfo, setInsuranceInfo] = useState<InsuranceInfo | null>(null);
+  const [showBillAuditor, setShowBillAuditor] = useState(false);
+  const [showTreatmentInfo, setShowTreatmentInfo] = useState(false);
+  const [showProfileOverview, setShowProfileOverview] = useState(false);
+  const [treatmentInfo, setTreatmentInfo] = useState<TreatmentDetails>({
+    description: '',
+    date: '',
+    provider: '',
+    location: '',
+    wasEmergency: false,
+    symptoms: '',
+    diagnosis: '',
+    followupNeeded: false
+  });
+  const [billItems, setBillItems] = useState<BillItem[]>([]);
+  const [showDocumentUpload, setShowDocumentUpload] = useState(false);
 
   const inference = new HfInference(process.env.AI_API_TOKEN);
 
@@ -25,15 +70,72 @@ function App() {
     scrollToBottom();
   }, [messages]);
 
+  // Load saved insurance info on startup
+  useEffect(() => {
+    const savedInfo = localStorage.getItem('insuranceInfo');
+    if (savedInfo) {
+      try {
+        setInsuranceInfo(JSON.parse(savedInfo));
+      } catch (e) {
+        console.error('Error loading saved insurance info:', e);
+      }
+    }
+
+    // Load saved treatment info
+    const savedTreatment = localStorage.getItem('treatmentInfo');
+    if (savedTreatment) {
+      try {
+        setTreatmentInfo(JSON.parse(savedTreatment));
+      } catch (e) {
+        console.error('Error loading saved treatment info:', e);
+      }
+    }
+  }, []);
+
   const analyzeWithAI = async (text: string) => {
     try {
       console.log('Sending request to x.ai API...');
+  
+      // Create a context string from insurance info if available
+      const insuranceContext = insuranceInfo ? `
+User's Insurance Information:
+- Provider: ${insuranceInfo.provider}
+- Plan Type: ${insuranceInfo.planType}
+- Deductible: ${insuranceInfo.deductible}
+- Copay: ${insuranceInfo.copay}
+${insuranceInfo.additionalInfo ? `- Additional Info: ${insuranceInfo.additionalInfo}` : ''}
+
+Please consider this information when responding to their query.
+` : '';
   
       const requestBody = {
         messages: [
           {
             role: 'system',
-            content: 'You are Hatch.AI, a helpful and knowledgeable healthcare claims assistant. You help users understand their healthcare claims and insurance coverage. Keep your responses clear, accurate, and focused on healthcare claims-related topics. Do not make up or promise any benefits or services.'
+            content: `You are Hatch.AI, a helpful and knowledgeable healthcare claims assistant. You help users understand their healthcare claims and insurance coverage.
+
+IMPORTANT FORMATTING INSTRUCTIONS:
+1. Always use double line breaks between sections
+2. Start each major section with a bold header using **Header Format**
+3. Use bullet points (•) for lists
+4. Use numbers (1., 2., 3.) for sequential steps
+5. Keep paragraphs short and focused
+6. Use markdown formatting for emphasis when needed
+7. Ensure there are clear visual breaks between sections
+
+Example Format:
+
+**Section One**
+Main point here with a short explanation.
+• Bullet point one
+• Bullet point two
+
+**Section Two**
+Another main point here.
+1. First step
+2. Second step
+
+${insuranceContext}`
           },
           {
             role: 'user',
@@ -130,11 +232,89 @@ function App() {
     }
   };
 
+  const handleResetChat = () => {
+    setMessages([]);
+    setNewMessage('');
+    setIsTyping(false);
+  };
+
+  const generateAnalysis = async () => {
+    if (!insuranceInfo) {
+      alert("Please enter your insurance information first");
+      return;
+    }
+
+    setIsTyping(true);
+
+    const analysisPrompt = `
+Please analyze this healthcare situation and format your response in clear, separate sections with headers in bold (**Header**) and use line breaks between sections.
+
+Information to analyze:
+
+INSURANCE INFORMATION:
+- Provider: ${insuranceInfo.provider}
+- Plan Type: ${insuranceInfo.planType}
+- Deductible: ${insuranceInfo.deductible}
+- Copay: ${insuranceInfo.copay}
+- Policy Details: ${insuranceInfo.additionalInfo}
+
+MEDICAL BILLS:
+${billItems.map(item => `- ${item.description}: $${item.amount} (Code: ${item.code})`).join('\n')}
+
+TREATMENT DETAILS:
+${treatmentInfo.description}
+
+Please provide a comprehensive analysis with the following sections:
+
+**Insurance Coverage Overview**
+[Explain their current insurance plan and key features]
+
+**Bill Analysis**
+[Break down the medical bills and identify any concerns]
+
+**Coverage Assessment**
+[Explain what should be covered under their plan]
+
+**Potential Issues**
+[List any overcharges, coding errors, or coverage concerns]
+
+**Patient Rights & Protections**
+[Explain relevant healthcare laws and patient protections]
+
+**Recommended Actions**
+[List specific steps they should take, numbered for clarity]
+
+**Cost Saving Opportunities**
+[Identify ways to reduce costs]
+
+**Next Steps Summary**
+[Prioritized list of actions to take]
+
+Please ensure each section is clearly separated with line breaks and use bullet points or numbered lists where appropriate.`;
+
+    try {
+      const response = await analyzeWithAI(analysisPrompt);
+      
+      const aiMessage: Message = {
+        id: Date.now().toString(),
+        text: response,
+        sender: 'ai',
+        timestamp: new Date().toISOString()
+      };
+
+      setMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      console.error('Analysis error:', error);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
   return (
     <div className="app">
       <header className="app-header">
         <div className="header-container">
-          <div className="logo">
+          <div className="logo" onClick={handleResetChat} role="button" tabIndex={0}>
             <svg className="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path 
                 d="M12 2L2 7L12 12L22 7L12 2Z" 
@@ -167,34 +347,66 @@ function App() {
                 <p className="description">Your personal AI assistant that helps decode insurance policies, explain coverage, and guide you through the claims process.</p>
                 
                 <div className="feature-grid">
-                  <div className="feature">
-                    <span className="feature-icon">🎯</span>
-                    <h3>Instant Answers</h3>
-                    <p>Get immediate responses to your healthcare coverage questions</p>
+                  <div 
+                    className="feature clickable"
+                    onClick={() => setShowProfile(true)}
+                  >
+                    <span className="feature-icon">👤</span>
+                    <h3>Insurance Details</h3>
+                    <p>Enter your insurance plan information</p>
                   </div>
-                  <div className="feature">
-                    <span className="feature-icon">📝</span>
-                    <h3>Claims Guidance</h3>
-                    <p>Step-by-step assistance with filing and tracking claims</p>
+                  
+                  <div 
+                    className="feature clickable"
+                    onClick={() => setShowBillAuditor(true)}
+                  >
+                    <span className="feature-icon">🔍</span>
+                    <h3>Medical Bills</h3>
+                    <p>Add your medical charges</p>
                   </div>
-                  <div className="feature">
-                    <span className="feature-icon">💡</span>
-                    <h3>Policy Clarity</h3>
-                    <p>Complex insurance terms explained in simple language</p>
+                  
+                  <div 
+                    className="feature clickable"
+                    onClick={() => setShowTreatmentInfo(true)}
+                  >
+                    <span className="feature-icon">🏥</span>
+                    <h3>Treatment Details</h3>
+                    <p>Describe your medical services</p>
+                  </div>
+
+                  <div 
+                    className="feature clickable"
+                    onClick={() => setShowProfileOverview(true)}
+                  >
+                    <span className="feature-icon">📋</span>
+                    <h3>Review Profile</h3>
+                    <p>View and edit your information</p>
+                  </div>
+
+                  <div 
+                    className="feature clickable"
+                    onClick={() => setShowDocumentUpload(true)}
+                  >
+                    <span className="feature-icon">📄</span>
+                    <h3>Upload Documents</h3>
+                    <p>Add medical bills, EOBs, and records</p>
                   </div>
                 </div>
 
                 <div className="welcome-examples">
                   <h3>Try asking about:</h3>
                   <div className="example-chips">
-                    <button onClick={() => setNewMessage("What's covered under my insurance plan?")}>
-                      Coverage details
+                    <button onClick={() => setNewMessage("What's my copay for a specialist visit with my current insurance?")}>
+                      Specialist copay
                     </button>
-                    <button onClick={() => setNewMessage("How do I submit a claim?")}>
-                      Claims process
+                    <button onClick={() => setNewMessage("How much of my deductible have I met this year?")}>
+                      Deductible status
                     </button>
-                    <button onClick={() => setNewMessage("Explain my deductible")}>
-                      Deductibles
+                    <button onClick={() => setNewMessage("Is my prescription covered under my plan?")}>
+                      Prescription coverage
+                    </button>
+                    <button onClick={() => setNewMessage("How do I find an in-network provider?")}>
+                      Find providers
                     </button>
                   </div>
                 </div>
@@ -221,17 +433,11 @@ function App() {
           )}
           
           {messages.map((message) => (
-            <div 
-              key={message.id} 
-              className={`message ${message.sender === 'user' ? 'user-message' : 'ai-message'}`}
-            >
-              <div className="message-content">
-                <span className="message-icon">
-                  {message.sender === 'user' ? '👤' : '🐣'}
-                </span>
-                <p>{message.text}</p>
-              </div>
-            </div>
+            <Message 
+              key={message.id}
+              text={message.text}
+              sender={message.sender}
+            />
           ))}
           
           {isTyping && (
@@ -260,10 +466,74 @@ function App() {
             disabled={isTyping}
           />
           <button type="submit" className="send-button" disabled={isTyping}>
-            {isTyping ? '...' : 'Send'} 
+            {isTyping ? '...' : 'Generate Review'} 
           </button>
         </form>
       </main>
+      {showProfile && (
+        <Profile
+          onClose={() => setShowProfile(false)}
+          onSave={(info) => {
+            setInsuranceInfo(info);
+            localStorage.setItem('insuranceInfo', JSON.stringify(info));
+          }}
+          savedInfo={insuranceInfo || undefined}
+        />
+      )}
+
+      {showBillAuditor && (
+        <div className="profile-overlay">
+          <div className="profile-modal">
+            <button className="close-button" onClick={() => setShowBillAuditor(false)}>×</button>
+            <BillAuditor 
+              onSave={(items) => setBillItems(items)}
+              initialBills={billItems}
+              onClose={() => setShowBillAuditor(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {showTreatmentInfo && (
+        <TreatmentInfo
+          onClose={() => setShowTreatmentInfo(false)}
+          onSave={(info) => {
+            setTreatmentInfo(info);
+            localStorage.setItem('treatmentInfo', JSON.stringify(info));
+          }}
+          savedInfo={treatmentInfo}
+        />
+      )}
+
+      {showProfileOverview && (
+        <ProfileOverview
+          insuranceInfo={insuranceInfo}
+          treatmentInfo={treatmentInfo}
+          billItems={billItems}
+          onEditInsurance={() => {
+            setShowProfile(true);
+            setShowProfileOverview(false);
+          }}
+          onEditTreatment={() => {
+            setShowTreatmentInfo(true);
+            setShowProfileOverview(false);
+          }}
+          onEditBills={() => {
+            setShowBillAuditor(true);
+            setShowProfileOverview(false);
+          }}
+          onClose={() => setShowProfileOverview(false)}
+        />
+      )}
+
+      {showDocumentUpload && (
+        <div className="profile-overlay">
+          <div className="profile-modal">
+            <button className="close-button" onClick={() => setShowDocumentUpload(false)}>×</button>
+            <DocumentUpload />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
